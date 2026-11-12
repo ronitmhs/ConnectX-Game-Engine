@@ -4,6 +4,9 @@ from src.bitboard import (
     valid_moves,
     has_won,
     immediate_wins,
+    winning_positions,
+    playable_positions,
+    playable_winning_positions
 )
 
 
@@ -154,3 +157,107 @@ def test_kaggle_board_conversion():
 
     assert has_won(p1)
     assert not has_won(p2)
+    
+def test_winning_positions_horizontal():
+    p1 = 0
+    p2 = 0
+
+    for col in [0, 1, 2]:
+        p1, p2 = play_move(p1, p2, col, 1)
+
+    mask = p1 | p2
+
+    wins = winning_positions(p1, mask)
+
+    expected = 1 << (3 * 7)
+
+    assert wins & expected
+
+
+def test_winning_positions_vertical():
+    p1 = 0
+    p2 = 0
+
+    for _ in range(3):
+        p1, p2 = play_move(p1, p2, 3, 1)
+
+    mask = p1 | p2
+
+    wins = winning_positions(p1, mask)
+
+    expected = 1 << (3 * 7 + 3)
+
+    assert wins & expected
+    
+
+def test_playable_positions_empty_board():
+    p1 = 0
+    p2 = 0
+
+    playable = playable_positions(p1, p2)
+
+    for col in range(7):
+        bottom = 1 << (col * 7)
+        assert playable & bottom
+
+
+def test_playable_horizontal_win():
+    p1 = 0
+    p2 = 0
+
+    for col in [0, 1, 2]:
+        p1, p2 = play_move(
+            p1,
+            p2,
+            col,
+            1,
+        )
+
+    wins = playable_winning_positions(
+        p1,
+        p2,
+        1,
+    )
+
+    expected = 1 << (3 * 7)
+
+    assert wins & expected
+
+
+def test_floating_threat_not_playable():
+    p1 = 0
+    p2 = 0
+
+    # Build three P1 pieces on the second row,
+    # supported underneath by P2.
+    for col in [0, 1, 2]:
+        p1, p2 = play_move(
+            p1,
+            p2,
+            col,
+            2,
+        )
+
+        p1, p2 = play_move(
+            p1,
+            p2,
+            col,
+            1,
+        )
+
+    theoretical = winning_positions(
+        p1,
+        p1 | p2,
+    )
+
+    playable = playable_winning_positions(
+        p1,
+        p2,
+        1,
+    )
+
+    # Winning square is second row of column 3.
+    target = 1 << (3 * 7 + 1)
+
+    assert theoretical & target
+    assert not (playable & target)

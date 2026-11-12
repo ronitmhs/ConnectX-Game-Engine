@@ -156,3 +156,81 @@ def immediate_wins(p1, p2, player):
             wins.append(col)
 
     return wins
+
+
+def winning_positions(position, mask):
+    """
+    Return a bitmask containing empty squares that would
+    complete a Connect Four for 'position'.
+
+    Uses bitboard operations instead of simulating every move.
+    """
+
+    result = 0
+
+    # Vertical
+    result |= (position << 1) & (position << 2) & (position << 3)
+
+    # Horizontal
+    p = (position << 7) & (position << 14)
+    result |= p & (position << 21)
+    result |= p & (position >> 7)
+
+    p = (position >> 7) & (position >> 14)
+    result |= p & (position >> 21)
+    result |= p & (position << 7)
+
+    # Diagonal /
+    p = (position << 6) & (position << 12)
+    result |= p & (position << 18)
+    result |= p & (position >> 6)
+
+    p = (position >> 6) & (position >> 12)
+    result |= p & (position >> 18)
+    result |= p & (position << 6)
+
+    # Diagonal \
+    p = (position << 8) & (position << 16)
+    result |= p & (position << 24)
+    result |= p & (position >> 8)
+
+    p = (position >> 8) & (position >> 16)
+    result |= p & (position >> 24)
+    result |= p & (position << 8)
+
+    # Only empty playable-board cells
+    return result & BOARD_MASK & ~mask
+
+
+def playable_positions(p1, p2):
+    """
+    Return a bitmask of every square that can legally
+    receive a checker right now.
+    """
+    mask = p1 | p2
+
+    return (
+        (mask + BOTTOM_MASK)
+        & BOARD_MASK
+    )
+
+
+def playable_winning_positions(p1, p2, player):
+    """
+    Winning squares for player that are legally playable
+    on the current move.
+    """
+    position = p1 if player == 1 else p2
+    mask = p1 | p2
+
+    wins = winning_positions(
+        position,
+        mask,
+    )
+
+    playable = playable_positions(
+        p1,
+        p2,
+    )
+
+    return wins & playable

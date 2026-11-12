@@ -4,7 +4,7 @@ from src.bitboard import (
     valid_moves,
     play_move,
     has_won,
-    immediate_wins,
+    playable_winning_positions,
 )
 
 WIN_SCORE = 1_000_000
@@ -31,29 +31,73 @@ class SearchEngine:
         self.completed_depth = 0
 
     def check_time(self):
-        # Don't call perf_counter on literally every node.
+        # Avoid calling perf_counter on every single node.
         if self.nodes & 1023 == 0:
             if time.perf_counter() - self.start_time >= self.time_limit:
                 raise SearchTimeout
 
+    # ========================================================
+    # FAST BITBOARD THREAT HELPERS
+    # ========================================================
+
+    def winning_columns(self, p1, p2, player):
+        """
+        Return columns where player can win immediately.
+
+        Uses bitboard threat calculation instead of
+        simulating every legal move.
+        """
+        wins = playable_winning_positions(
+            p1,
+            p2,
+            player,
+        )
+
+        columns = []
+
+        for col in range(7):
+            column_mask = (
+                ((1 << 6) - 1)
+                << (col * 7)
+            )
+
+            if wins & column_mask:
+                columns.append(col)
+
+        return columns
+
+    def winning_count(self, p1, p2, player):
+        """
+        Number of immediately playable winning squares.
+        """
+        wins = playable_winning_positions(
+            p1,
+            p2,
+            player,
+        )
+
+        return wins.bit_count()
+
+    # ========================================================
+    # EVALUATION
+    # ========================================================
+
     def evaluate(self, p1, p2, root_player):
         """
-        Temporary evaluation.
+        Lightweight tactical evaluation.
 
-        We intentionally keep this simple for now.
-        Tactical correctness comes from search.
-        Strong Connect-Four evaluation comes later.
+        More sophisticated Connect Four evaluation will
+        be added after the search core is optimized.
         """
-
         opponent = 3 - root_player
 
-        my_wins = immediate_wins(
+        my_wins = self.winning_count(
             p1,
             p2,
             root_player,
         )
 
-        opp_wins = immediate_wins(
+        opp_wins = self.winning_count(
             p1,
             p2,
             opponent,
@@ -61,20 +105,37 @@ class SearchEngine:
 
         score = 0
 
-        if len(my_wins) >= 2:
+        # Double threat / fork
+        if my_wins >= 2:
             score += 5000
-        elif len(my_wins) == 1:
+
+        elif my_wins == 1:
             score += 500
 
-        if len(opp_wins) >= 2:
+        # Opponent double threat is more dangerous
+        if opp_wins >= 2:
             score -= 6000
-        elif len(opp_wins) == 1:
+
+        elif opp_wins == 1:
             score -= 700
 
         return score
 
-    def ordered_moves(self, p1, p2, player, tt_move=None):
-        moves = valid_moves(p1, p2)
+    # ========================================================
+    # MOVE ORDERING
+    # ========================================================
+
+    def ordered_moves(
+        self,
+        p1,
+        p2,
+        player,
+        tt_move=None,
+    ):
+        moves = valid_moves(
+            p1,
+            p2,
+        )
 
         if not moves:
             return moves
@@ -82,7 +143,7 @@ class SearchEngine:
         opponent = 3 - player
 
         winning = set(
-            immediate_wins(
+            self.winning_columns(
                 p1,
                 p2,
                 player,
@@ -90,7 +151,7 @@ class SearchEngine:
         )
 
         blocks = set(
-            immediate_wins(
+            self.winning_columns(
                 p1,
                 p2,
                 opponent,
@@ -102,12 +163,15 @@ class SearchEngine:
         for col in moves:
             priority = 0
 
+            # TT / principal variation move
             if col == tt_move:
                 priority += 1_000_000
 
+            # Immediate win
             if col in winning:
                 priority += 500_000
 
+            # Immediate forced block
             if col in blocks:
                 priority += 250_000
 
@@ -125,6 +189,10 @@ class SearchEngine:
             for _, col in scored
         ]
 
+    # ========================================================
+    # NEGAMAX + ALPHA-BETA
+    # ========================================================
+
     def negamax(
         self,
         p1,
@@ -138,20 +206,28 @@ class SearchEngine:
         self.nodes += 1
         self.check_time()
 
-        # The previous player may have won.
+        # Previous player may have just won.
         previous_player = 3 - player
+
         previous_position = (
-            p1 if previous_player == 1 else p2
+            p1
+            if previous_player == 1
+            else p2
         )
 
         if has_won(previous_position):
             return -WIN_SCORE + ply
 
-        moves = valid_moves(p1, p2)
+        moves = valid_moves(
+            p1,
+            p2,
+        )
 
+        # Full board = draw
         if not moves:
             return 0
 
+        # Search horizon
         if depth == 0:
             return self.evaluate(
                 p1,
@@ -162,6 +238,10 @@ class SearchEngine:
         alpha_original = alpha
         beta_original = beta
 
+        # ----------------------------------------------------
+        # Transposition table
+        # ----------------------------------------------------
+
         key = (
             p1,
             p2,
@@ -169,6 +249,7 @@ class SearchEngine:
         )
 
         entry = self.tt.get(key)
+
         tt_move = None
 
         if entry is not None:
@@ -181,16 +262,26 @@ class SearchEngine:
                     return value
 
                 if flag == LOWER:
-                    alpha = max(alpha, value)
+                    alpha = max(
+                        alpha,
+                        value,
+                    )
 
                 elif flag == UPPER:
-                    beta = min(beta, value)
+                    beta = min(
+                        beta,
+                        value,
+                    )
 
                 if alpha >= beta:
                     return value
 
         best = -INF
         best_move = None
+
+        # ----------------------------------------------------
+        # Search children
+        # ----------------------------------------------------
 
         for col in self.ordered_moves(
             p1,
@@ -219,10 +310,15 @@ class SearchEngine:
                 best = score
                 best_move = col
 
-            alpha = max(alpha, score)
+            if score > alpha:
+                alpha = score
 
             if alpha >= beta:
                 break
+
+        # ----------------------------------------------------
+        # Correct TT bound type
+        # ----------------------------------------------------
 
         if best <= alpha_original:
             flag = UPPER
@@ -235,7 +331,10 @@ class SearchEngine:
 
         old = self.tt.get(key)
 
-        if old is None or depth >= old[0]:
+        if (
+            old is None
+            or depth >= old[0]
+        ):
             self.tt[key] = (
                 depth,
                 best,
@@ -244,6 +343,10 @@ class SearchEngine:
             )
 
         return best
+
+    # ========================================================
+    # ROOT SEARCH
+    # ========================================================
 
     def search_depth(
         self,
@@ -299,12 +402,17 @@ class SearchEngine:
                 best_score = score
                 best_move = col
 
-            alpha = max(
-                alpha,
-                best_score,
-            )
+            if best_score > alpha:
+                alpha = best_score
 
-        return best_move, best_score
+        return (
+            best_move,
+            best_score,
+        )
+
+    # ========================================================
+    # ITERATIVE DEEPENING
+    # ========================================================
 
     def choose_move(
         self,
@@ -321,13 +429,19 @@ class SearchEngine:
         self.tt_hits = 0
         self.completed_depth = 0
 
-        moves = valid_moves(p1, p2)
+        moves = valid_moves(
+            p1,
+            p2,
+        )
 
         if not moves:
             return None
 
-        # Tactical shortcuts
-        wins = immediate_wins(
+        # ----------------------------------------------------
+        # Immediate win
+        # ----------------------------------------------------
+
+        wins = self.winning_columns(
             p1,
             p2,
             player,
@@ -336,7 +450,11 @@ class SearchEngine:
         if wins:
             return wins[0]
 
-        opponent_wins = immediate_wins(
+        # ----------------------------------------------------
+        # Forced immediate block
+        # ----------------------------------------------------
+
+        opponent_wins = self.winning_columns(
             p1,
             p2,
             3 - player,
@@ -344,6 +462,15 @@ class SearchEngine:
 
         if len(opponent_wins) == 1:
             return opponent_wins[0]
+
+        # If opponent has multiple immediate wins,
+        # search normally. The position may already
+        # be forced lost, but negamax should determine
+        # the best practical continuation.
+
+        # ----------------------------------------------------
+        # Iterative deepening
+        # ----------------------------------------------------
 
         best_move = moves[0]
 
@@ -359,9 +486,12 @@ class SearchEngine:
                     depth,
                 )
 
+                # Only keep results from a fully
+                # completed iteration.
                 best_move = move
                 self.completed_depth = depth
 
+                # Proven forced win found.
                 if score >= WIN_SCORE - 100:
                     break
 
