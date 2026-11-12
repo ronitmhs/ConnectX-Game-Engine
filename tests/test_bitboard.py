@@ -6,7 +6,9 @@ from src.bitboard import (
     immediate_wins,
     winning_positions,
     playable_positions,
-    playable_winning_positions
+    playable_winning_positions,
+    possible_non_losing_moves,
+    non_losing_moves
 )
 
 
@@ -261,3 +263,104 @@ def test_floating_threat_not_playable():
 
     assert theoretical & target
     assert not (playable & target)
+    
+
+def test_non_losing_moves_normal_position():
+    p1 = 0
+    p2 = 0
+
+    moves = non_losing_moves(
+        p1,
+        p2,
+        1,
+    )
+
+    assert set(moves) == set(range(7))
+
+
+def test_non_losing_moves_forced_block():
+    p1 = 0
+    p2 = 0
+
+    # Player 2 threatens horizontal win at column 3.
+    for col in [0, 1, 2]:
+        p1, p2 = play_move(
+            p1,
+            p2,
+            col,
+            2,
+        )
+
+    moves = non_losing_moves(
+        p1,
+        p2,
+        1,
+    )
+
+    assert moves == [3]
+
+
+def test_non_losing_moves_double_threat():
+    p1 = 0
+    p2 = 0
+
+    # Build two independent vertical winning threats
+    # for Player 2.
+    for _ in range(3):
+        p1, p2 = play_move(
+            p1,
+            p2,
+            0,
+            2,
+        )
+
+        p1, p2 = play_move(
+            p1,
+            p2,
+            1,
+            2,
+        )
+
+    moves = non_losing_moves(
+        p1,
+        p2,
+        1,
+    )
+
+    assert moves == []
+
+
+def test_do_not_support_opponent_win():
+    p1 = 0
+    p2 = 0
+
+    # Create a floating opponent threat.
+    #
+    # Playing underneath the winning square should
+    # be considered unsafe because gravity makes
+    # that opponent square playable next turn.
+
+    for col in [0, 1, 2]:
+        p1, p2 = play_move(
+            p1,
+            p2,
+            col,
+            1,
+        )
+
+        p1, p2 = play_move(
+            p1,
+            p2,
+            col,
+            2,
+        )
+
+    moves = non_losing_moves(
+        p1,
+        p2,
+        1,
+    )
+
+    # Column 3 would support Player 2's horizontal
+    # winning square directly above it.
+    assert 3 not in moves

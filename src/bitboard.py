@@ -234,3 +234,106 @@ def playable_winning_positions(p1, p2, player):
     )
 
     return wins & playable
+
+
+def possible_moves_mask(p1, p2):
+    """
+    Bitmask containing every square that can legally
+    receive a checker on this move.
+    """
+    return playable_positions(p1, p2)
+
+
+def possible_non_losing_moves(p1, p2, player):
+    """
+    Return a bitmask of legal moves that do not allow
+    an immediate forced loss on the opponent's next move.
+
+    Based on the non-losing move filtering used by
+    strong Connect Four solvers.
+    """
+    opponent = 3 - player
+
+    mask = p1 | p2
+
+    opponent_position = (
+        p1 if opponent == 1 else p2
+    )
+
+    possible = possible_moves_mask(
+        p1,
+        p2,
+    )
+
+    # All empty squares that would complete an
+    # opponent Connect Four.
+    opponent_winning = winning_positions(
+        opponent_position,
+        mask,
+    )
+
+    # Opponent winning squares that are playable now.
+    forced = (
+        opponent_winning
+        & possible
+    )
+
+    # --------------------------------------------------------
+    # More than one immediate opponent winning square:
+    # position is already tactically lost.
+    # --------------------------------------------------------
+
+    if forced.bit_count() >= 2:
+        return 0
+
+    # --------------------------------------------------------
+    # Exactly one immediate threat:
+    # we MUST play there.
+    # --------------------------------------------------------
+
+    if forced:
+        possible &= forced
+
+    # --------------------------------------------------------
+    # Critical gravity rule:
+    #
+    # Don't play underneath an opponent winning square.
+    # Doing so would make that square playable next turn.
+    # --------------------------------------------------------
+
+    possible &= ~(
+        opponent_winning >> 1
+    )
+
+    return possible & BOARD_MASK
+
+
+def mask_to_columns(move_mask):
+    """
+    Convert a playable-square bitmask into column numbers.
+    """
+    columns = []
+
+    for col in CENTER_ORDER:
+        column_mask = (
+            ((1 << ROWS) - 1)
+            << (col * BITS_PER_COL)
+        )
+
+        if move_mask & column_mask:
+            columns.append(col)
+
+    return columns
+
+
+def non_losing_moves(p1, p2, player):
+    """
+    Column-list wrapper around possible_non_losing_moves().
+    """
+    return mask_to_columns(
+        possible_non_losing_moves(
+            p1,
+            p2,
+            player,
+        )
+    )
