@@ -1,5 +1,7 @@
 import time
 
+from sympy import ordered
+
 from src.bitboard import (
     valid_moves,
     play_move,
@@ -7,6 +9,7 @@ from src.bitboard import (
     playable_winning_positions,
     non_losing_moves,
 )
+
 
 WIN_SCORE = 1_000_000
 INF = 10**9
@@ -23,6 +26,7 @@ class SearchTimeout(Exception):
 class SearchEngine:
     def __init__(self, time_limit=1.65):
         self.time_limit = time_limit
+
         self.start_time = 0.0
 
         self.tt = {}
@@ -36,10 +40,14 @@ class SearchEngine:
     # ========================================================
 
     def check_time(self):
-        # Avoid calling perf_counter() on every node.
+        """
+        Check the clock periodically instead of on every node.
+        """
+
         if self.nodes & 1023 == 0:
             if (
-                time.perf_counter() - self.start_time
+                time.perf_counter()
+                - self.start_time
                 >= self.time_limit
             ):
                 raise SearchTimeout
@@ -48,7 +56,12 @@ class SearchEngine:
     # FAST BITBOARD THREAT HELPERS
     # ========================================================
 
-    def winning_columns(self, p1, p2, player):
+    def winning_columns(
+        self,
+        p1,
+        p2,
+        player,
+    ):
         """
         Return columns where player can win immediately.
         """
@@ -72,7 +85,12 @@ class SearchEngine:
 
         return columns
 
-    def winning_count(self, p1, p2, player):
+    def winning_count(
+        self,
+        p1,
+        p2,
+        player,
+    ):
         """
         Number of immediately playable winning squares.
         """
@@ -89,7 +107,12 @@ class SearchEngine:
     # EVALUATION
     # ========================================================
 
-    def evaluate(self, p1, p2, root_player):
+    def evaluate(
+        self,
+        p1,
+        p2,
+        root_player,
+    ):
         """
         Lightweight tactical evaluation.
         """
@@ -137,11 +160,13 @@ class SearchEngine:
         moves=None,
     ):
         """
-        Order either a supplied candidate-move list or
-        all legal moves.
+        Order candidate moves for alpha-beta.
 
-        Search passes the already-filtered non-losing moves
-        here so unsafe moves are never reintroduced.
+        Priority:
+        1. TT/PV move
+        2. Immediate win
+        3. Immediate block
+        4. Center preference
         """
 
         if moves is None:
@@ -176,25 +201,28 @@ class SearchEngine:
         for col in moves:
             priority = 0
 
-            # TT / principal variation move
+            # Principal variation / TT move.
             if col == tt_move:
                 priority += 1_000_000
 
-            # Immediate win
+            # Immediate win.
             if col in winning:
                 priority += 500_000
 
-            # Immediate forced block
+            # Immediate forced block.
             if col in blocks:
                 priority += 250_000
 
-            # Center-first positional ordering
+            # Center-first ordering.
             priority += (
                 20 - abs(3 - col)
             )
 
             scored.append(
-                (priority, col)
+                (
+                    priority,
+                    col,
+                )
             )
 
         scored.sort(
@@ -221,13 +249,16 @@ class SearchEngine:
         ply,
     ):
         self.nodes += 1
+
         self.check_time()
 
         # ----------------------------------------------------
         # TERMINAL WIN CHECK
         # ----------------------------------------------------
 
-        previous_player = 3 - player
+        previous_player = (
+            3 - player
+        )
 
         previous_position = (
             p1
@@ -243,7 +274,7 @@ class SearchEngine:
             )
 
         # ----------------------------------------------------
-        # FULL BOARD CHECK
+        # FULL BOARD
         # ----------------------------------------------------
 
         legal_moves = valid_moves(
@@ -275,8 +306,8 @@ class SearchEngine:
             player,
         )
 
-        # If legal moves exist but none are non-losing,
-        # the opponent has an unavoidable tactical win.
+        # Legal moves exist, but all allow an unavoidable
+        # tactical loss.
         if not moves:
             return (
                 -WIN_SCORE + ply
@@ -345,6 +376,8 @@ class SearchEngine:
             moves,
         )
 
+        first_child = True
+
         for col in ordered:
             n1, n2 = play_move(
                 p1,
@@ -353,15 +386,38 @@ class SearchEngine:
                 player,
             )
 
-            score = -self.negamax(
-                n1,
-                n2,
-                3 - player,
-                depth - 1,
-                -beta,
-                -alpha,
-                ply + 1,
-            )
+            if first_child:
+                score = -self.negamax(
+                    n1,
+                    n2,
+                    3 - player,
+                    depth - 1,
+                    -beta,
+                    -alpha,
+                    ply + 1,
+                )
+                first_child = False
+            else:
+                score = -self.negamax(
+                    n1,
+                    n2,
+                    3 - player,
+                    depth - 1,
+                    -alpha - 1,
+                    -alpha,
+                    ply + 1,
+                )
+
+                if alpha < score < beta:
+                    score = -self.negamax(
+                        n1,
+                        n2,
+                        3 - player,
+                        depth - 1,
+                        -beta,
+                        -alpha,
+                        ply + 1,
+                    )
 
             if score > best:
                 best = score
@@ -414,6 +470,10 @@ class SearchEngine:
         player,
         depth,
     ):
+        """
+        Search one complete root depth.
+        """
+
         best_move = None
         best_score = -INF
 
@@ -436,15 +496,15 @@ class SearchEngine:
             else None
         )
 
-        # Apply the same tactical filtering at the root.
+        # Apply non-losing filtering at the root.
         moves = non_losing_moves(
             p1,
             p2,
             player,
         )
 
-        # If everything is losing, search legal moves anyway
-        # so the agent still returns a valid continuation.
+        # If every move loses, still search legal moves so
+        # the agent always returns a valid continuation.
         if not moves:
             moves = valid_moves(
                 p1,
@@ -459,6 +519,8 @@ class SearchEngine:
             moves,
         )
 
+        first_child = True
+
         for col in ordered:
             n1, n2 = play_move(
                 p1,
@@ -467,15 +529,38 @@ class SearchEngine:
                 player,
             )
 
-            score = -self.negamax(
-                n1,
-                n2,
-                3 - player,
-                depth - 1,
-                -beta,
-                -alpha,
-                1,
-            )
+            if first_child:
+                score = -self.negamax(
+                    n1,
+                    n2,
+                    3 - player,
+                    depth - 1,
+                    -beta,
+                    -alpha,
+                    1,
+                )
+                first_child = False
+            else:
+                score = -self.negamax(
+                    n1,
+                    n2,
+                    3 - player,
+                    depth - 1,
+                    -alpha - 1,
+                    -alpha,
+                    1,
+                )
+
+                if alpha < score < beta:
+                    score = -self.negamax(
+                        n1,
+                        n2,
+                        3 - player,
+                        depth - 1,
+                        -beta,
+                        -alpha,
+                        1,
+                    )
 
             if score > best_score:
                 best_score = score
@@ -484,10 +569,230 @@ class SearchEngine:
             if best_score > alpha:
                 alpha = best_score
 
+        # Store the root result too.
+        #
+        # This lets us reconstruct the complete principal
+        # variation beginning with the root move.
+        self.tt[key] = (
+            depth,
+            best_score,
+            EXACT,
+            best_move,
+        )
+
         return (
             best_move,
             best_score,
         )
+
+    # ========================================================
+    # PRINCIPAL VARIATION
+    # ========================================================
+
+    def get_principal_variation(
+        self,
+        p1,
+        p2,
+        player,
+        max_length=42,
+    ):
+        """
+        Reconstruct the engine's predicted best line by
+        following TT best moves.
+
+        Returns zero-based column numbers.
+        """
+
+        pv = []
+
+        current_p1 = p1
+        current_p2 = p2
+        current_player = player
+
+        for _ in range(
+            max_length
+        ):
+            key = (
+                current_p1,
+                current_p2,
+                current_player,
+            )
+
+            entry = self.tt.get(
+                key
+            )
+
+            if entry is None:
+                break
+
+            (
+                _,
+                _,
+                _,
+                best_move,
+            ) = entry
+
+            if best_move is None:
+                break
+
+            legal = valid_moves(
+                current_p1,
+                current_p2,
+            )
+
+            if best_move not in legal:
+                break
+
+            pv.append(
+                best_move
+            )
+
+            current_p1, current_p2 = (
+                play_move(
+                    current_p1,
+                    current_p2,
+                    best_move,
+                    current_player,
+                )
+            )
+
+            position = (
+                current_p1
+                if current_player == 1
+                else current_p2
+            )
+
+            if has_won(
+                position
+            ):
+                break
+
+            current_player = (
+                3 - current_player
+            )
+
+        return pv
+
+    # ========================================================
+    # DIRECT EXACT ENDGAME SEARCH
+    # ========================================================
+
+    def choose_move_exact(
+        self,
+        p1,
+        p2,
+        player,
+        depth,
+    ):
+        """
+        Direct exact-to-terminal search.
+
+        Unlike normal choose_move(), this skips iterative
+        deepening and immediately searches the requested
+        terminal depth.
+
+        If the search exceeds its time budget, return a
+        tactically safe fallback rather than starting
+        another expensive search.
+        """
+
+        self.start_time = (
+            time.perf_counter()
+        )
+
+        self.tt.clear()
+
+        self.nodes = 0
+        self.tt_hits = 0
+        self.completed_depth = 0
+
+        moves = valid_moves(
+            p1,
+            p2,
+        )
+
+        if not moves:
+            return None
+
+        # ----------------------------------------------------
+        # IMMEDIATE WIN
+        # ----------------------------------------------------
+
+        wins = self.winning_columns(
+            p1,
+            p2,
+            player,
+        )
+
+        if wins:
+            self.completed_depth = depth
+            return wins[0]
+
+        # ----------------------------------------------------
+        # FORCED IMMEDIATE BLOCK
+        # ----------------------------------------------------
+
+        opponent_wins = (
+            self.winning_columns(
+                p1,
+                p2,
+                3 - player,
+            )
+        )
+
+        if len(opponent_wins) == 1:
+            self.completed_depth = depth
+            return opponent_wins[0]
+
+        # ----------------------------------------------------
+        # NON-LOSING MOVES
+        # ----------------------------------------------------
+
+        safe_moves = non_losing_moves(
+            p1,
+            p2,
+            player,
+        )
+
+        if len(safe_moves) == 1:
+            self.completed_depth = depth
+            return safe_moves[0]
+
+        candidates = (
+            safe_moves
+            if safe_moves
+            else moves
+        )
+
+        # ----------------------------------------------------
+        # SAFE TIMEOUT FALLBACK
+        # ----------------------------------------------------
+
+        fallback = self.ordered_moves(
+            p1,
+            p2,
+            player,
+            moves=candidates,
+        )[0]
+
+        # ----------------------------------------------------
+        # DIRECT TERMINAL SEARCH
+        # ----------------------------------------------------
+
+        try:
+            move, _ = self.search_depth(
+                p1,
+                p2,
+                player,
+                depth,
+            )
+
+            self.completed_depth = depth
+
+            return move
+
+        except SearchTimeout:
+            return fallback
 
     # ========================================================
     # ITERATIVE DEEPENING
@@ -500,6 +805,10 @@ class SearchEngine:
         player,
         max_depth=42,
     ):
+        """
+        Normal timed middlegame search.
+        """
+
         self.start_time = (
             time.perf_counter()
         )
@@ -556,20 +865,33 @@ class SearchEngine:
             player,
         )
 
-        # If only one move avoids immediate tactical loss,
-        # there is no reason to spend search time rediscovering it.
+        # If exactly one move avoids an immediate tactical
+        # loss, don't waste search time rediscovering it.
         if len(safe_moves) == 1:
             return safe_moves[0]
 
         # ----------------------------------------------------
-        # ITERATIVE DEEPENING
+        # INITIAL FALLBACK
         # ----------------------------------------------------
 
-        best_move = (
-            safe_moves[0]
+        candidates = (
+            safe_moves
             if safe_moves
-            else moves[0]
+            else moves
         )
+
+        ordered = self.ordered_moves(
+            p1,
+            p2,
+            player,
+            moves=candidates,
+        )
+
+        best_move = ordered[0]
+
+        # ----------------------------------------------------
+        # ITERATIVE DEEPENING
+        # ----------------------------------------------------
 
         try:
             for depth in range(

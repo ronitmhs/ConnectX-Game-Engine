@@ -1,17 +1,28 @@
 # ============================================================
-# ConnectX V6
+# ConnectX V6B
 #
 # Self-contained Kaggle competition agent.
 #
-# Features:
-# - Bitboard representation
-# - Bitwise win/threat detection
-# - Gravity-aware non-losing move pruning
-# - Iterative-deepening negamax
-# - Alpha-beta pruning
-# - Transposition table
+# Architecture:
+#
+# EARLY GAME
 # - Solved depth-10 opening book
-# - Horizontal symmetry-aware book lookup
+# - 1,208,493 solved positions
+# - Horizontal symmetry-aware lookup
+#
+# MIDDLEGAME
+# - Bitboard negamax
+# - Alpha-beta pruning
+# - Iterative deepening
+# - Transposition table
+# - Gravity-aware threat detection
+# - Non-losing move pruning
+#
+# ENDGAME
+# - Direct exact-to-terminal search
+# - Activates with <= 23 empty cells
+#
+# No external files or local src imports required.
 # ============================================================
 
 import base64
@@ -21,7 +32,7 @@ import time
 
 
 # ============================================================
-# BITBOARD
+# BITBOARD ENGINE
 # ============================================================
 
 # ConnectX bitboard representation
@@ -372,6 +383,7 @@ def non_losing_moves(p1, p2, player):
 import time
 
 
+
 WIN_SCORE = 1_000_000
 INF = 10**9
 
@@ -387,6 +399,7 @@ class SearchTimeout(Exception):
 class SearchEngine:
     def __init__(self, time_limit=1.65):
         self.time_limit = time_limit
+
         self.start_time = 0.0
 
         self.tt = {}
@@ -400,10 +413,14 @@ class SearchEngine:
     # ========================================================
 
     def check_time(self):
-        # Avoid calling perf_counter() on every node.
+        """
+        Check the clock periodically instead of on every node.
+        """
+
         if self.nodes & 1023 == 0:
             if (
-                time.perf_counter() - self.start_time
+                time.perf_counter()
+                - self.start_time
                 >= self.time_limit
             ):
                 raise SearchTimeout
@@ -412,7 +429,12 @@ class SearchEngine:
     # FAST BITBOARD THREAT HELPERS
     # ========================================================
 
-    def winning_columns(self, p1, p2, player):
+    def winning_columns(
+        self,
+        p1,
+        p2,
+        player,
+    ):
         """
         Return columns where player can win immediately.
         """
@@ -436,7 +458,12 @@ class SearchEngine:
 
         return columns
 
-    def winning_count(self, p1, p2, player):
+    def winning_count(
+        self,
+        p1,
+        p2,
+        player,
+    ):
         """
         Number of immediately playable winning squares.
         """
@@ -453,7 +480,12 @@ class SearchEngine:
     # EVALUATION
     # ========================================================
 
-    def evaluate(self, p1, p2, root_player):
+    def evaluate(
+        self,
+        p1,
+        p2,
+        root_player,
+    ):
         """
         Lightweight tactical evaluation.
         """
@@ -501,11 +533,13 @@ class SearchEngine:
         moves=None,
     ):
         """
-        Order either a supplied candidate-move list or
-        all legal moves.
+        Order candidate moves for alpha-beta.
 
-        Search passes the already-filtered non-losing moves
-        here so unsafe moves are never reintroduced.
+        Priority:
+        1. TT/PV move
+        2. Immediate win
+        3. Immediate block
+        4. Center preference
         """
 
         if moves is None:
@@ -540,25 +574,28 @@ class SearchEngine:
         for col in moves:
             priority = 0
 
-            # TT / principal variation move
+            # Principal variation / TT move.
             if col == tt_move:
                 priority += 1_000_000
 
-            # Immediate win
+            # Immediate win.
             if col in winning:
                 priority += 500_000
 
-            # Immediate forced block
+            # Immediate forced block.
             if col in blocks:
                 priority += 250_000
 
-            # Center-first positional ordering
+            # Center-first ordering.
             priority += (
                 20 - abs(3 - col)
             )
 
             scored.append(
-                (priority, col)
+                (
+                    priority,
+                    col,
+                )
             )
 
         scored.sort(
@@ -585,13 +622,16 @@ class SearchEngine:
         ply,
     ):
         self.nodes += 1
+
         self.check_time()
 
         # ----------------------------------------------------
         # TERMINAL WIN CHECK
         # ----------------------------------------------------
 
-        previous_player = 3 - player
+        previous_player = (
+            3 - player
+        )
 
         previous_position = (
             p1
@@ -607,7 +647,7 @@ class SearchEngine:
             )
 
         # ----------------------------------------------------
-        # FULL BOARD CHECK
+        # FULL BOARD
         # ----------------------------------------------------
 
         legal_moves = valid_moves(
@@ -639,8 +679,8 @@ class SearchEngine:
             player,
         )
 
-        # If legal moves exist but none are non-losing,
-        # the opponent has an unavoidable tactical win.
+        # Legal moves exist, but all allow an unavoidable
+        # tactical loss.
         if not moves:
             return (
                 -WIN_SCORE + ply
@@ -778,6 +818,10 @@ class SearchEngine:
         player,
         depth,
     ):
+        """
+        Search one complete root depth.
+        """
+
         best_move = None
         best_score = -INF
 
@@ -800,15 +844,15 @@ class SearchEngine:
             else None
         )
 
-        # Apply the same tactical filtering at the root.
+        # Apply non-losing filtering at the root.
         moves = non_losing_moves(
             p1,
             p2,
             player,
         )
 
-        # If everything is losing, search legal moves anyway
-        # so the agent still returns a valid continuation.
+        # If every move loses, still search legal moves so
+        # the agent always returns a valid continuation.
         if not moves:
             moves = valid_moves(
                 p1,
@@ -848,10 +892,230 @@ class SearchEngine:
             if best_score > alpha:
                 alpha = best_score
 
+        # Store the root result too.
+        #
+        # This lets us reconstruct the complete principal
+        # variation beginning with the root move.
+        self.tt[key] = (
+            depth,
+            best_score,
+            EXACT,
+            best_move,
+        )
+
         return (
             best_move,
             best_score,
         )
+
+    # ========================================================
+    # PRINCIPAL VARIATION
+    # ========================================================
+
+    def get_principal_variation(
+        self,
+        p1,
+        p2,
+        player,
+        max_length=42,
+    ):
+        """
+        Reconstruct the engine's predicted best line by
+        following TT best moves.
+
+        Returns zero-based column numbers.
+        """
+
+        pv = []
+
+        current_p1 = p1
+        current_p2 = p2
+        current_player = player
+
+        for _ in range(
+            max_length
+        ):
+            key = (
+                current_p1,
+                current_p2,
+                current_player,
+            )
+
+            entry = self.tt.get(
+                key
+            )
+
+            if entry is None:
+                break
+
+            (
+                _,
+                _,
+                _,
+                best_move,
+            ) = entry
+
+            if best_move is None:
+                break
+
+            legal = valid_moves(
+                current_p1,
+                current_p2,
+            )
+
+            if best_move not in legal:
+                break
+
+            pv.append(
+                best_move
+            )
+
+            current_p1, current_p2 = (
+                play_move(
+                    current_p1,
+                    current_p2,
+                    best_move,
+                    current_player,
+                )
+            )
+
+            position = (
+                current_p1
+                if current_player == 1
+                else current_p2
+            )
+
+            if has_won(
+                position
+            ):
+                break
+
+            current_player = (
+                3 - current_player
+            )
+
+        return pv
+
+    # ========================================================
+    # DIRECT EXACT ENDGAME SEARCH
+    # ========================================================
+
+    def choose_move_exact(
+        self,
+        p1,
+        p2,
+        player,
+        depth,
+    ):
+        """
+        Direct exact-to-terminal search.
+
+        Unlike normal choose_move(), this skips iterative
+        deepening and immediately searches the requested
+        terminal depth.
+
+        If the search exceeds its time budget, return a
+        tactically safe fallback rather than starting
+        another expensive search.
+        """
+
+        self.start_time = (
+            time.perf_counter()
+        )
+
+        self.tt.clear()
+
+        self.nodes = 0
+        self.tt_hits = 0
+        self.completed_depth = 0
+
+        moves = valid_moves(
+            p1,
+            p2,
+        )
+
+        if not moves:
+            return None
+
+        # ----------------------------------------------------
+        # IMMEDIATE WIN
+        # ----------------------------------------------------
+
+        wins = self.winning_columns(
+            p1,
+            p2,
+            player,
+        )
+
+        if wins:
+            self.completed_depth = depth
+            return wins[0]
+
+        # ----------------------------------------------------
+        # FORCED IMMEDIATE BLOCK
+        # ----------------------------------------------------
+
+        opponent_wins = (
+            self.winning_columns(
+                p1,
+                p2,
+                3 - player,
+            )
+        )
+
+        if len(opponent_wins) == 1:
+            self.completed_depth = depth
+            return opponent_wins[0]
+
+        # ----------------------------------------------------
+        # NON-LOSING MOVES
+        # ----------------------------------------------------
+
+        safe_moves = non_losing_moves(
+            p1,
+            p2,
+            player,
+        )
+
+        if len(safe_moves) == 1:
+            self.completed_depth = depth
+            return safe_moves[0]
+
+        candidates = (
+            safe_moves
+            if safe_moves
+            else moves
+        )
+
+        # ----------------------------------------------------
+        # SAFE TIMEOUT FALLBACK
+        # ----------------------------------------------------
+
+        fallback = self.ordered_moves(
+            p1,
+            p2,
+            player,
+            moves=candidates,
+        )[0]
+
+        # ----------------------------------------------------
+        # DIRECT TERMINAL SEARCH
+        # ----------------------------------------------------
+
+        try:
+            move, _ = self.search_depth(
+                p1,
+                p2,
+                player,
+                depth,
+            )
+
+            self.completed_depth = depth
+
+            return move
+
+        except SearchTimeout:
+            return fallback
 
     # ========================================================
     # ITERATIVE DEEPENING
@@ -864,6 +1128,10 @@ class SearchEngine:
         player,
         max_depth=42,
     ):
+        """
+        Normal timed middlegame search.
+        """
+
         self.start_time = (
             time.perf_counter()
         )
@@ -920,20 +1188,33 @@ class SearchEngine:
             player,
         )
 
-        # If only one move avoids immediate tactical loss,
-        # there is no reason to spend search time rediscovering it.
+        # If exactly one move avoids an immediate tactical
+        # loss, don't waste search time rediscovering it.
         if len(safe_moves) == 1:
             return safe_moves[0]
 
         # ----------------------------------------------------
-        # ITERATIVE DEEPENING
+        # INITIAL FALLBACK
         # ----------------------------------------------------
 
-        best_move = (
-            safe_moves[0]
+        candidates = (
+            safe_moves
             if safe_moves
-            else moves[0]
+            else moves
         )
+
+        ordered = self.ordered_moves(
+            p1,
+            p2,
+            player,
+            moves=candidates,
+        )
+
+        best_move = ordered[0]
+
+        # ----------------------------------------------------
+        # ITERATIVE DEEPENING
+        # ----------------------------------------------------
 
         try:
             for depth in range(
@@ -38894,17 +39175,28 @@ _BOOK = None
 
 
 def mirror_bitboard(position):
+    """
+    Horizontally mirror the 7-column bitboard.
+
+    Each Connect Four column occupies seven bits:
+    six playable cells plus one sentinel bit.
+    """
+
     mirrored = 0
 
-    column_mask = (1 << 7) - 1
+    column_mask = (
+        (1 << 7) - 1
+    )
 
     for col in range(7):
         column = (
-            position >> (col * 7)
+            position
+            >> (col * 7)
         ) & column_mask
 
         mirrored |= (
-            column << ((6 - col) * 7)
+            column
+            << ((6 - col) * 7)
         )
 
     return mirrored
@@ -38920,20 +39212,30 @@ def mirror_move_mask(mask):
     for col in range(7):
         if mask & (1 << col):
             mirrored |= (
-                1 << mirror_move(col)
+                1
+                << mirror_move(col)
             )
 
     return mirrored
 
 
 def load_opening_book():
+    """
+    Decode and decompress the embedded opening book once.
+
+    The resulting dictionary is cached globally for all
+    later agent calls.
+    """
+
     global _BOOK
 
     if _BOOK is not None:
         return _BOOK
 
     compressed = base64.b85decode(
-        BOOK_DATA_B85.encode("ascii")
+        BOOK_DATA_B85.encode(
+            "ascii"
+        )
     )
 
     raw = lzma.decompress(
@@ -38954,11 +39256,14 @@ def load_opening_book():
         len(raw),
         size,
     ):
-        p1, p2, score, move_mask = (
-            BOOK_RECORD.unpack_from(
-                raw,
-                offset,
-            )
+        (
+            p1,
+            p2,
+            score,
+            move_mask,
+        ) = BOOK_RECORD.unpack_from(
+            raw,
+            offset,
         )
 
         book[(p1, p2)] = (
@@ -38972,6 +39277,13 @@ def load_opening_book():
 
 
 def book_lookup(p1, p2):
+    """
+    Exact lookup first.
+
+    If the exact orientation is absent, try the
+    horizontally mirrored position.
+    """
+
     book = load_opening_book()
 
     result = book.get(
@@ -38981,8 +39293,13 @@ def book_lookup(p1, p2):
     if result is not None:
         return result
 
-    mp1 = mirror_bitboard(p1)
-    mp2 = mirror_bitboard(p2)
+    mp1 = mirror_bitboard(
+        p1
+    )
+
+    mp2 = mirror_bitboard(
+        p2
+    )
 
     result = book.get(
         (mp1, mp2)
@@ -38995,7 +39312,9 @@ def book_lookup(p1, p2):
 
     return (
         score,
-        mirror_move_mask(move_mask),
+        mirror_move_mask(
+            move_mask
+        ),
     )
 
 
@@ -39013,11 +39332,19 @@ def book_best_moves(p1, p2):
     return [
         col
         for col in range(7)
-        if move_mask & (1 << col)
+        if move_mask
+        & (1 << col)
     ]
 
 
 def book_choose_move(p1, p2):
+    """
+    Choose a solved optimal opening move.
+
+    Prefer center-oriented moves when several moves
+    have the same solved score.
+    """
+
     result = book_lookup(
         p1,
         p2,
@@ -39036,28 +39363,93 @@ def book_choose_move(p1, p2):
 
 
 # ============================================================
+# V6B SEARCH SETTINGS
+# ============================================================
+
+SEARCH_TIME = 1.65
+
+# Exact endgame gets its own smaller budget.
+# If exact search times out, choose_move_exact()
+# returns a safe fallback rather than launching
+# another full search.
+EXACT_TIME = 1.40
+
+# At 23 or fewer empty cells, attempt a direct
+# terminal-depth solve.
+EXACT_ENDGAME_EMPTIES = 23
+
+
+# ============================================================
 # KAGGLE AGENT
 # ============================================================
 
-def agent(observation, configuration):
+def agent(
+    observation,
+    configuration,
+):
     p1, p2 = board_to_bitboards(
         observation.board
     )
 
     player = observation.mark
 
-    # Solved opening theory first.
+    # --------------------------------------------------------
+    # 1. SOLVED OPENING BOOK
+    # --------------------------------------------------------
+
     book_move = book_choose_move(
         p1,
         p2,
     )
 
     if book_move is not None:
-        return int(book_move)
+        return int(
+            book_move
+        )
 
-    # Search after leaving the book.
+    # --------------------------------------------------------
+    # 2. EXACT ENDGAME
+    # --------------------------------------------------------
+
+    ply = (
+        p1 | p2
+    ).bit_count()
+
+    empties = 42 - ply
+
+    if (
+        empties
+        <= EXACT_ENDGAME_EMPTIES
+    ):
+        engine = SearchEngine(
+            time_limit=EXACT_TIME
+        )
+
+        move = (
+            engine.choose_move_exact(
+                p1,
+                p2,
+                player,
+                depth=empties,
+            )
+        )
+
+        # choose_move_exact() returns a safe fallback
+        # if the terminal search exceeds its budget.
+        #
+        # None should therefore occur only when there
+        # is no legal move.
+        if move is not None:
+            return int(
+                move
+            )
+
+    # --------------------------------------------------------
+    # 3. TIMED MIDDLEGAME SEARCH
+    # --------------------------------------------------------
+
     engine = SearchEngine(
-        time_limit=1.65
+        time_limit=SEARCH_TIME
     )
 
     move = engine.choose_move(
@@ -39066,4 +39458,6 @@ def agent(observation, configuration):
         player,
     )
 
-    return int(move)
+    return int(
+        move
+    )

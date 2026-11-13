@@ -4,3 +4,19 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# Generated/downloaded opening books
+data/opening_book/*.bin
+data/opening_book/*.book
+data/opening_book/*.dat
+
+# Local Kaggle episode data
+data/episodes_v6/
+data/episodes_v6_1/
+data/episodes/*.json
+
+# Generated/local opening-book data
+data/opening_book/
+
+# External Connect Four solver
+tools/connect4/

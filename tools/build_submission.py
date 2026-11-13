@@ -1,14 +1,18 @@
 from pathlib import Path
 import base64
 import lzma
-import re
 
 
 ROOT = Path(__file__).resolve().parent.parent
 
 BITBOARD_FILE = ROOT / "src" / "bitboard.py"
 SEARCH_FILE = ROOT / "src" / "search.py"
-BOOK_FILE = ROOT / "data" / "opening_book" / "book_d10.bin"
+BOOK_FILE = (
+    ROOT
+    / "data"
+    / "opening_book"
+    / "book_d10.bin"
+)
 
 OUTPUT_FILE = ROOT / "submission.py"
 
@@ -16,7 +20,9 @@ OUTPUT_FILE = ROOT / "submission.py"
 def clean_module(text):
     """
     Remove imports that reference our local src package.
-    Standard-library imports remain.
+
+    Standard-library imports remain because submission.py
+    can use Python's built-in modules.
     """
 
     lines = text.splitlines()
@@ -27,19 +33,29 @@ def clean_module(text):
     for line in lines:
         stripped = line.strip()
 
-        # Handle multiline:
+        # Remove local imports such as:
         #
         # from src.bitboard import (
         #     ...
         # )
+        #
+        # or:
+        #
+        # from src.bitboard import something
+
         if stripped.startswith("from src."):
-            if "(" in line and ")" not in line:
+            if (
+                "(" in line
+                and ")" not in line
+            ):
                 skipping_import = True
+
             continue
 
         if skipping_import:
             if ")" in line:
                 skipping_import = False
+
             continue
 
         cleaned.append(line)
@@ -48,6 +64,12 @@ def clean_module(text):
 
 
 def encode_book():
+    """
+    Compress the depth-10 binary opening book with LZMA
+    and encode it as Base85 so it can live inside one
+    Python submission file.
+    """
+
     raw = BOOK_FILE.read_bytes()
 
     compressed = lzma.compress(
@@ -59,17 +81,37 @@ def encode_book():
         compressed
     ).decode("ascii")
 
-    return raw, compressed, encoded
+    return (
+        raw,
+        compressed,
+        encoded,
+    )
 
 
-def wrap_encoded_book(encoded, width=100):
+def wrap_encoded_book(
+    encoded,
+    width=100,
+):
+    """
+    Split the Base85 string into manageable Python
+    string literals.
+    """
+
     return "\n".join(
         f'    "{encoded[i:i + width]}"'
-        for i in range(0, len(encoded), width)
+        for i in range(
+            0,
+            len(encoded),
+            width,
+        )
     )
 
 
 def main():
+    # ========================================================
+    # READ CURRENT ENGINE
+    # ========================================================
+
     bitboard_code = clean_module(
         BITBOARD_FILE.read_text()
     )
@@ -78,26 +120,49 @@ def main():
         SEARCH_FILE.read_text()
     )
 
-    raw, compressed, encoded = encode_book()
+    # ========================================================
+    # EMBED OPENING BOOK
+    # ========================================================
 
-    encoded_literal = wrap_encoded_book(
-        encoded
+    raw, compressed, encoded = (
+        encode_book()
     )
 
+    encoded_literal = (
+        wrap_encoded_book(
+            encoded
+        )
+    )
+
+    # ========================================================
+    # BUILD SELF-CONTAINED SUBMISSION
+    # ========================================================
+
     submission = f'''# ============================================================
-# ConnectX V6
+# ConnectX V6B
 #
 # Self-contained Kaggle competition agent.
 #
-# Features:
-# - Bitboard representation
-# - Bitwise win/threat detection
-# - Gravity-aware non-losing move pruning
-# - Iterative-deepening negamax
-# - Alpha-beta pruning
-# - Transposition table
+# Architecture:
+#
+# EARLY GAME
 # - Solved depth-10 opening book
-# - Horizontal symmetry-aware book lookup
+# - 1,208,493 solved positions
+# - Horizontal symmetry-aware lookup
+#
+# MIDDLEGAME
+# - Bitboard negamax
+# - Alpha-beta pruning
+# - Iterative deepening
+# - Transposition table
+# - Gravity-aware threat detection
+# - Non-losing move pruning
+#
+# ENDGAME
+# - Direct exact-to-terminal search
+# - Activates with <= 23 empty cells
+#
+# No external files or local src imports required.
 # ============================================================
 
 import base64
@@ -107,7 +172,7 @@ import time
 
 
 # ============================================================
-# BITBOARD
+# BITBOARD ENGINE
 # ============================================================
 
 {bitboard_code}
@@ -134,17 +199,28 @@ _BOOK = None
 
 
 def mirror_bitboard(position):
+    """
+    Horizontally mirror the 7-column bitboard.
+
+    Each Connect Four column occupies seven bits:
+    six playable cells plus one sentinel bit.
+    """
+
     mirrored = 0
 
-    column_mask = (1 << 7) - 1
+    column_mask = (
+        (1 << 7) - 1
+    )
 
     for col in range(7):
         column = (
-            position >> (col * 7)
+            position
+            >> (col * 7)
         ) & column_mask
 
         mirrored |= (
-            column << ((6 - col) * 7)
+            column
+            << ((6 - col) * 7)
         )
 
     return mirrored
@@ -160,20 +236,30 @@ def mirror_move_mask(mask):
     for col in range(7):
         if mask & (1 << col):
             mirrored |= (
-                1 << mirror_move(col)
+                1
+                << mirror_move(col)
             )
 
     return mirrored
 
 
 def load_opening_book():
+    """
+    Decode and decompress the embedded opening book once.
+
+    The resulting dictionary is cached globally for all
+    later agent calls.
+    """
+
     global _BOOK
 
     if _BOOK is not None:
         return _BOOK
 
     compressed = base64.b85decode(
-        BOOK_DATA_B85.encode("ascii")
+        BOOK_DATA_B85.encode(
+            "ascii"
+        )
     )
 
     raw = lzma.decompress(
@@ -194,11 +280,14 @@ def load_opening_book():
         len(raw),
         size,
     ):
-        p1, p2, score, move_mask = (
-            BOOK_RECORD.unpack_from(
-                raw,
-                offset,
-            )
+        (
+            p1,
+            p2,
+            score,
+            move_mask,
+        ) = BOOK_RECORD.unpack_from(
+            raw,
+            offset,
         )
 
         book[(p1, p2)] = (
@@ -212,6 +301,13 @@ def load_opening_book():
 
 
 def book_lookup(p1, p2):
+    """
+    Exact lookup first.
+
+    If the exact orientation is absent, try the
+    horizontally mirrored position.
+    """
+
     book = load_opening_book()
 
     result = book.get(
@@ -221,8 +317,13 @@ def book_lookup(p1, p2):
     if result is not None:
         return result
 
-    mp1 = mirror_bitboard(p1)
-    mp2 = mirror_bitboard(p2)
+    mp1 = mirror_bitboard(
+        p1
+    )
+
+    mp2 = mirror_bitboard(
+        p2
+    )
 
     result = book.get(
         (mp1, mp2)
@@ -235,7 +336,9 @@ def book_lookup(p1, p2):
 
     return (
         score,
-        mirror_move_mask(move_mask),
+        mirror_move_mask(
+            move_mask
+        ),
     )
 
 
@@ -253,11 +356,19 @@ def book_best_moves(p1, p2):
     return [
         col
         for col in range(7)
-        if move_mask & (1 << col)
+        if move_mask
+        & (1 << col)
     ]
 
 
 def book_choose_move(p1, p2):
+    """
+    Choose a solved optimal opening move.
+
+    Prefer center-oriented moves when several moves
+    have the same solved score.
+    """
+
     result = book_lookup(
         p1,
         p2,
@@ -276,28 +387,93 @@ def book_choose_move(p1, p2):
 
 
 # ============================================================
+# V6B SEARCH SETTINGS
+# ============================================================
+
+SEARCH_TIME = 1.65
+
+# Exact endgame gets its own smaller budget.
+# If exact search times out, choose_move_exact()
+# returns a safe fallback rather than launching
+# another full search.
+EXACT_TIME = 1.40
+
+# At 23 or fewer empty cells, attempt a direct
+# terminal-depth solve.
+EXACT_ENDGAME_EMPTIES = 23
+
+
+# ============================================================
 # KAGGLE AGENT
 # ============================================================
 
-def agent(observation, configuration):
+def agent(
+    observation,
+    configuration,
+):
     p1, p2 = board_to_bitboards(
         observation.board
     )
 
     player = observation.mark
 
-    # Solved opening theory first.
+    # --------------------------------------------------------
+    # 1. SOLVED OPENING BOOK
+    # --------------------------------------------------------
+
     book_move = book_choose_move(
         p1,
         p2,
     )
 
     if book_move is not None:
-        return int(book_move)
+        return int(
+            book_move
+        )
 
-    # Search after leaving the book.
+    # --------------------------------------------------------
+    # 2. EXACT ENDGAME
+    # --------------------------------------------------------
+
+    ply = (
+        p1 | p2
+    ).bit_count()
+
+    empties = 42 - ply
+
+    if (
+        empties
+        <= EXACT_ENDGAME_EMPTIES
+    ):
+        engine = SearchEngine(
+            time_limit=EXACT_TIME
+        )
+
+        move = (
+            engine.choose_move_exact(
+                p1,
+                p2,
+                player,
+                depth=empties,
+            )
+        )
+
+        # choose_move_exact() returns a safe fallback
+        # if the terminal search exceeds its budget.
+        #
+        # None should therefore occur only when there
+        # is no legal move.
+        if move is not None:
+            return int(
+                move
+            )
+
+    # --------------------------------------------------------
+    # 3. TIMED MIDDLEGAME SEARCH
+    # --------------------------------------------------------
+
     engine = SearchEngine(
-        time_limit=1.65
+        time_limit=SEARCH_TIME
     )
 
     move = engine.choose_move(
@@ -306,38 +482,61 @@ def agent(observation, configuration):
         player,
     )
 
-    return int(move)
+    return int(
+        move
+    )
 '''
+
+    # ========================================================
+    # WRITE OUTPUT
+    # ========================================================
 
     OUTPUT_FILE.write_text(
         submission
     )
 
-    print("Generated:", OUTPUT_FILE)
+    # ========================================================
+    # BUILD REPORT
+    # ========================================================
+
+    print(
+        "Generated:",
+        OUTPUT_FILE,
+    )
+
     print(
         "Raw book:",
         round(
-            len(raw) / 1024 / 1024,
+            len(raw)
+            / 1024
+            / 1024,
             2,
         ),
         "MB",
     )
+
     print(
         "Compressed book:",
         round(
-            len(compressed) / 1024 / 1024,
+            len(compressed)
+            / 1024
+            / 1024,
             2,
         ),
         "MB",
     )
+
     print(
         "Encoded book:",
         round(
-            len(encoded) / 1024 / 1024,
+            len(encoded)
+            / 1024
+            / 1024,
             2,
         ),
         "MB",
     )
+
     print(
         "submission.py:",
         round(
@@ -347,6 +546,25 @@ def agent(observation, configuration):
             2,
         ),
         "MB",
+    )
+
+    print()
+    print(
+        "V6B exact cutoff:",
+        23,
+        "empty cells",
+    )
+
+    print(
+        "Exact-search budget:",
+        1.40,
+        "seconds",
+    )
+
+    print(
+        "Middlegame budget:",
+        1.65,
+        "seconds",
     )
 
 
