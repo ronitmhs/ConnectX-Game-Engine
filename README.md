@@ -1,125 +1,239 @@
 # ConnectX Autonomous Game Agent
 
-A high-performance autonomous Connect Four agent developed for the Kaggle ConnectX competition.
+A high-performance Connect Four agent developed for the Kaggle ConnectX competition.
 
-The project explores how an intelligent agent can make decisions under strict time constraints using **adversarial planning, Minimax-style search, alpha-beta pruning, state memory, solved knowledge, exact search, and automated evaluation**.
+The project combines **solved game knowledge, adversarial search, exact solving, bitboard optimization, regression testing, and oracle-driven evaluation**. Development progressed from a time-bounded Python search agent to an experimentally perfect solver and finally to a Kaggle-compatible hybrid that incorporates deeper exact knowledge while retaining the proven search fallback.
 
-Rather than selecting moves from fixed rules, the agent evaluates the current state, models possible opponent responses, searches future trajectories, reuses previously solved states, and autonomously selects an action designed to maximize the game-theoretic outcome.
+## Current Agent: V7.1 Hybrid
 
-## Intelligent Agent Concepts
+V7.1 is the current Kaggle-compatible agent.
 
-ConnectX implements several foundational ideas in autonomous decision-making and classical AI.
-
-### Adversarial Planning
-
-The engine uses **Negamax**, a simplified formulation of Minimax, to model both its own future actions and the opponent's responses.
-
-Each candidate move creates a future game state, which creates another set of possible actions and counter-actions. The agent recursively searches this game tree before committing to a move.
-
-### Alpha-Beta Pruning
-
-Searching every possible future game state is computationally infeasible under Kaggle's runtime constraints.
-
-**Alpha-beta pruning** allows the agent to eliminate branches that cannot influence the final decision, enabling substantially deeper planning without changing the theoretical result of the search.
-
-### Principal Variation Search
-
-V6 extends alpha-beta search with **Principal Variation Search (PVS)**.
-
-The engine predicts the most promising continuation and searches that principal variation first. Alternative moves can then be tested using narrower search windows, reducing unnecessary exploration when move ordering is accurate.
-
-### Time-Bounded Decision Making
-
-The agent uses **iterative deepening** to progressively increase planning depth.
-
-This creates an anytime decision process:
+Its decision pipeline is:
 
 ```text
-depth 1
-   ↓
-depth 2
-   ↓
-depth 3
-   ↓
-...
-   ↓
-time budget reached
-   ↓
-return deepest fully completed decision
+Current Position
+      |
+      v
++---------------------------+
+| V7 Depth-12 Exact Book    |
+| 9,188,816 solved states   |
++-------------+-------------+
+              |
+              | Can the move be
+              | proven exactly?
+              v
+        Yes ------> Play exact move
+              |
+              No
+              v
++---------------------------+
+| V6.1 Fallback             |
+|                           |
+| Solved opening book       |
+| PVS / alpha-beta search   |
+| Transposition table       |
+| Exact endgame search      |
++-------------+-------------+
+              |
+              v
+         Selected Move
 ```
 
-If search is interrupted by the runtime limit, the agent retains the result from the deepest fully completed iteration rather than returning an incomplete search result.
+The V7.1 override is intentionally conservative. It replaces V6.1's decision only when the depth-12 book contains enough information to prove the complete move decision exactly. Otherwise, the agent falls back to the existing V6.1 engine.
 
-### State Memory
+This preserves the behavior of the established Kaggle-compatible agent while correcting positions where deeper solved knowledge can demonstrate a better move.
 
-A **transposition table** acts as search memory.
+## V7.1 vs V6.1
 
-Different action sequences can reach identical game states. Instead of analyzing those states repeatedly, the engine caches previous search results and reuses them when the same position appears elsewhere in the search tree.
+V7.1 was compared against V6.1 using positions with independently verified perfect-solver results.
 
-### Knowledge Retrieval
+On 49 real positions where the V7.1 exact-book override had complete coverage:
 
-The agent also uses a large solved opening book.
+| Agent | Optimal Decisions |
+|---|---:|
+| V6.1 | 44 / 49 — 89.80% |
+| V7.1 | **49 / 49 — 100.00%** |
 
-When the current state matches previously solved knowledge, the engine can retrieve the appropriate action immediately rather than recomputing the position from scratch.
-
-### Multi-Step Prediction
-
-The engine records its **principal variation**, representing its predicted best sequence of future actions for both itself and its opponent.
-
-This makes it possible to inspect not only what move the agent chooses, but what it expects the opponent to do next and how it plans to respond.
-
-## V6 Architecture
-
-The current engine uses a layered decision pipeline:
+V7.1 corrected **5 demonstrated V6.1 mistakes** in this set.
 
 ```text
-Current Board State
+V7.1 improvements: 5
+V7.1 regressions:  0
+```
+
+Outside exactly proven V7.1 positions, the engine falls back to V6.1.
+
+## Experimental V7 Perfect Solver
+
+Before V7.1, the project developed a substantially stronger V7 exact solver.
+
+V7 combines:
+
+- A 9,188,816-position depth-12 exact opening book
+- Bitboard game representation
+- Null-window Negamax
+- Alpha-beta pruning
+- Mathematical Connect Four score bounds
+- Non-losing move pruning
+- Threat-based move ordering
+- Symmetry-aware transposition tables
+- Numba-compiled search
+
+### Independent Perfect-Solver Validation
+
+V7 was tested on **415 unique, non-terminal positions extracted from real Kaggle games**, spanning plies 10 through 24.
+
+The independent Rust perfect solver served as the oracle.
+
+```text
+Exact score agreement:  415 / 415 — 100%
+Optimal move agreement: 415 / 415 — 100%
+Outcome agreement:      415 / 415 — 100%
+Errors:                  0
+```
+
+Performance on the same set:
+
+```text
+Average:  0.0228 s
+Median:   0.0021 s
+P95:      0.1080 s
+P99:      0.2548 s
+Maximum:  1.1335 s
+> 2 sec:  0
+```
+
+Of the 415 decisions:
+
+```text
+Book decisions:   76
+Exact solves:    339
+```
+
+This ensured the validation was not simply measuring opening-book retrieval.
+
+## V7 vs V6.1
+
+V7 and V6.1 were also compared in **830 paired games** starting from 415 distinct real Kaggle positions.
+
+Each starting position was played twice with player assignments reversed.
+
+```text
+V7 wins:    402
+V6.1 wins:  353
+Draws:       75
+
+V7 match score: 52.95%
+```
+
+V7 was also substantially faster during this evaluation:
+
+| Metric | V7 | V6.1 |
+|---|---:|---:|
+| Average move | 0.0034 s | 0.1771 s |
+| Median | 0.00013 s | 0.00112 s |
+| P95 | 0.0146 s | 1.6554 s |
+| P99 | 0.0609 s | 1.6591 s |
+| Maximum | 1.0700 s | 1.7016 s |
+| Moves > 2 s | 0 | 0 |
+
+## Exact Disagreement Analysis
+
+Head-to-head game results alone can hide decision quality because different moves may preserve the same theoretical outcome.
+
+The tournament therefore recorded every unique position where V7 and V6.1 selected different moves.
+
+This produced **1,507 disagreement positions**, which were independently solved.
+
+```text
+V7 optimal:    1507 / 1507 — 100.00%
+V6.1 optimal:  1437 / 1507 — 95.36%
+```
+
+Decision-quality breakdown:
+
+```text
+Both optimal:             1437
+V7 optimal, V6.1 not:       70
+V6.1 optimal, V7 not:        0
+Neither optimal:              0
+```
+
+On positions with a theoretically winning outcome:
+
+```text
+V7 optimal:    552 / 552 — 100.00%
+V6.1 optimal:  513 / 552 — 92.93%
+```
+
+This produced the strongest evidence that V7 improved decision quality rather than merely winning more test games.
+
+## Why V7.1 Exists
+
+The full V7 solver is fast enough locally, but Kaggle's submission validator exposed a deployment incompatibility.
+
+The local development environment used:
+
+```text
+NumPy 2.3.5
+Numba 0.62.1
+```
+
+The Kaggle submission validator used a NumPy version incompatible with its installed Numba package, causing Numba to fail during module import before the agent could play.
+
+Instead of weakening the solver or relying on unsupported runtime behavior, V7.1 moves the useful exact knowledge into a pure-Python-compatible deployment architecture:
+
+```text
+Offline exact solving
         |
         v
-+-----------------------+
-| Immediate Tactics     |
-| Win / Forced Block    |
-+-----------+-----------+
-            |
-            v
-+-----------------------+
-| Solved Opening Book   |
-| ~1.2M positions       |
-+-----------+-----------+
-            |
-            v
-+-----------------------+
-| Middlegame Search     |
-| Negamax               |
-| Alpha-Beta            |
-| PVS                   |
-| Iterative Deepening   |
-| Transposition Table   |
-+-----------+-----------+
-            |
-            v
-+-----------------------+
-| Exact Endgame Search  |
-| <= 23 empty cells     |
-+-----------+-----------+
-            |
-            v
-        Selected Move
+Compressed solved knowledge
+        |
+        v
+Runtime lookup
+        |
+        +---- exact decision available --> use it
+        |
+        +---- otherwise -----------------> V6.1
 ```
 
-## Opening Knowledge
+The result retains a Kaggle-compatible Python runtime while incorporating exact improvements discovered during V7 development.
 
-V6 uses a solved opening book containing approximately **1.2 million positions**.
+## Solved Knowledge
 
-The book is compressed and embedded into the standalone Kaggle submission.
+### V6 Opening Book
 
-Lookup is horizontal-symmetry aware, allowing mirrored positions to share solved knowledge and reducing redundant storage.
+The V6/V6.1 engine uses a solved opening book containing approximately **1.2 million positions**.
 
-This provides strong early-game decisions without consuming the move's search budget.
+It stores solved opening actions and supports horizontal symmetry to reduce redundant storage.
 
-## Middlegame Search
+### V7 Depth-12 Book
 
-Positions outside solved opening coverage are handled by a bitboard search engine implementing:
+V7 introduced a much larger exact score book:
+
+```text
+Positions: 9,188,816
+Raw compact book: ~20 MB
+LZMA compressed:  ~4.6 MB
+Base85 embedded:  ~5.8 MB
+```
+
+The compact representation uses block-indexed, delta-encoded keys to make millions of solved states practical to embed inside a standalone Python submission.
+
+A benchmark of the block-indexed book produced lookup throughput around:
+
+```text
+~21,900 lookups / second
+~45.6 microseconds / lookup
+```
+
+in the standalone Python reader benchmark.
+
+## V6.1 Search Engine
+
+When exact solved knowledge is unavailable, V7.1 retains the V6.1 search engine.
+
+The engine includes:
 
 - Negamax / Minimax-style adversarial search
 - Alpha-beta pruning
@@ -132,234 +246,103 @@ Positions outside solved opening coverage are handled by a bitboard search engin
 - Gravity-aware threat detection
 - Tactical move ordering
 - Time-controlled search
+- Exact late-game search
 
-The engine uses a compact bitboard representation with seven bits per column to make board operations and tactical checks efficient.
+The board uses a compact seven-bits-per-column bitboard representation.
 
 ## Exact Endgame Search
 
-Late-game positions can switch from heuristic depth-limited search to direct **exact-to-terminal search**.
+V6.1 can switch from heuristic depth-limited search to direct exact-to-terminal search in sufficiently late positions.
 
-The current endgame solver activates with **23 or fewer empty cells**.
-
-Instead of asking whether a position appears favorable at a search horizon, exact search attempts to determine the actual game-theoretic result.
-
-## Automated Evaluation
-
-A major part of the project became evaluating the agent rather than simply adding more heuristics.
-
-The repository contains tooling for:
-
-- V6 vs. baseline tournaments
-- A/B engine testing
-- Search benchmarks
-- Opening-book validation
-- Endgame benchmarks
-- Regression testing
-- Principal-variation analysis
-- Real Kaggle episode parsing
-- Exact solver comparison
-- Root move-ordering experiments
-- Game-theoretic oracle analysis
-
-## Pascal Pons Solver Oracle
-
-Real V6 decisions are compared against the Pascal Pons Connect Four solver.
-
-For each position, the oracle determines the exact score of every legal move and checks whether V6 selected a game-theoretically optimal action.
-
-Moves can then be classified by their effect on the theoretical result:
+The production cutoff is currently:
 
 ```text
-WIN  -> WIN
-WIN  -> DRAW
-WIN  -> LOSS
-
-DRAW -> DRAW
-DRAW -> LOSS
-
-LOSS -> LOSS
+23 or fewer empty cells
 ```
 
-This provides a stronger evaluation signal than win rate alone.
-
-A move can therefore be identified as a critical mistake even if V6 later wins because the opponent fails to exploit it.
-
-## Real Kaggle Evaluation
-
-A dataset of **56 analyzable V6.1 Kaggle games** was evaluated using the solver oracle.
-
-Across **1,072 V6 decisions**:
-
-- **1,019** were Pascal Pons-best decisions
-- **95.1%** Pons-best move rate
-- **1,038** preserved the game-theoretic result
-- **96.8%** outcome-preserving rate
-
-The oracle identified **34 outcome-changing decisions**:
-
-| Transition | Count |
-|---|---:|
-| WIN -> DRAW | 16 |
-| WIN -> LOSS | 12 |
-| DRAW -> LOSS | 6 |
-| **Total** | **34** |
-
-## Discovering the Main Failure Region
-
-One of the most useful findings came from grouping real competition failures by game depth.
-
-Every identified outcome-changing V6 decision occurred between **plies 11 and 18**.
-
-Most were concentrated even earlier:
-
-```text
-Ply 11 : 4
-Ply 12 : 6
-Ply 13 : 5
-Ply 14 : 9
-Ply 15 : 4
-Ply 16 : 3
-Ply 17 : 0
-Ply 18 : 3
-```
-
-**28 of 34 critical mistakes occurred between plies 11 and 15.**
-
-This revealed a specific architectural weakness rather than a general engine failure:
-
-```text
-Solved Opening
-      |
-      | strong
-      v
-~ Ply 10
-      |
-      | <-- primary remaining weakness
-      |
-Ply 11-18
-      |
-      v
-Exact Endgame
-      |
-      | strong
-      v
-Terminal State
-```
-
-The largest remaining problem is therefore the **bridge between solved opening knowledge and deep exact search**.
+If exact solving cannot complete within its time budget, the engine retains a safe fallback rather than returning an incomplete search result.
 
 ## Failure-Driven Development
 
-Real competition mistakes are converted into regression positions.
+A major part of this project is the evaluation pipeline rather than only the search algorithm.
 
-Oracle analysis discovered positions where V6 converted winning or drawing positions into theoretically worse outcomes.
-
-These positions were isolated, reproduced locally, analyzed at different search depths, and added to regression tests.
-
-This creates an iterative development cycle:
+Real competition failures are converted into reproducible regression positions:
 
 ```text
 Kaggle Game
-     ↓
+     |
+     v
 Episode Analysis
-     ↓
-Solver Oracle
-     ↓
-Identify Critical Decision
-     ↓
-Reproduce Locally
-     ↓
-Diagnose Search Failure
-     ↓
+     |
+     v
+Perfect-Solver Oracle
+     |
+     v
+Critical Decision
+     |
+     v
+Local Reproduction
+     |
+     v
 Regression Test
-     ↓
+     |
+     v
 Engine Improvement
 ```
 
-This prevents previously diagnosed failures from silently returning in later versions.
+This process exposed the main V6 weakness around the transition between solved opening knowledge and deeper search.
 
-## Search Optimization Experiments
+Earlier analysis found that all identified outcome-changing V6 decisions occurred between approximately **plies 11 and 18**, with most concentrated near the beginning of that interval.
 
-Several search improvements were evaluated through controlled A/B testing.
+That observation directly motivated the deeper V7 solved book and V7.1 hybrid architecture.
 
-### Principal Variation Search
+## Testing
 
-PVS reduced the number of nodes required on difficult regression positions while preserving existing correctness tests.
+The repository includes tests and benchmarks for:
 
-### Root Move Ordering
+- Bitboard operations
+- Opening-book lookup
+- Compact-book encoding
+- Search behavior
+- Historical solver regressions
+- V7 book lookup
+- V7 regression positions
+- Exact-solver benchmarking
+- V6 A/B testing
+- V7 vs V6.1 tournaments
+- Real Kaggle episode analysis
+- Perfect-solver oracle comparison
+- Submission packaging
 
-Experiments demonstrated that search cost can change significantly depending on whether the true principal variation is explored early.
+Run the test suite with:
 
-This highlighted the interaction between:
-
-- iterative deepening
-- transposition-table move ordering
-- principal variation prediction
-- alpha-beta efficiency
-
-### Search Depth Analysis
-
-Critical Kaggle positions were searched at increasing depths and compared against exact solver decisions.
-
-Some failures were corrected at approximately depth 15, while others required depth 18 or remained unresolved by heuristic search at that depth.
-
-This demonstrated that the remaining problem could not be solved purely through small parameter adjustments.
-
-## Experimental Exact Solver
-
-The project also includes an experimental Python implementation of a Connect-Four-specific exact solver based on techniques used by Pascal Pons.
-
-It explores:
-
-- Null-window Negamax
-- Mathematical game-score bounds
-- Non-losing move generation
-- Threat-based move ordering
-- Bound-based transposition tables
-- Exact game-theoretic solving
-
-The implementation successfully reproduced exact Pons results on tested positions.
-
-However, profiling exposed a major performance difference between the Python implementation and an optimized **C++ Connect Four solver**.
-
-Difficult positions that required several seconds or more in the experimental Python implementation could be solved by the optimized C++ solver in tens of milliseconds.
-
-Because Kaggle imposes a strict per-move runtime constraint, future improvements to deep exact solving may benefit from moving performance-critical solving or offline solved-position generation to **C++**.
-
-The experimental Python exact solver is retained for research and validation but is **not currently part of the production V6 decision pipeline**.
-
-## Potential V7 Architecture
-
-Real-game failure analysis suggests a future architecture based on extending solved knowledge through the middlegame bridge:
-
-```text
-+-----------------------+
-| Solved Opening Book   |
-| Early Game            |
-+-----------+-----------+
-            |
-            v
-+-----------------------+
-| Solved Bridge         |
-| Ply ~11-18            |
-| Offline C++ Solving   |
-+-----------+-----------+
-            |
-            v
-+-----------------------+
-| PVS Search Fallback   |
-| Python                |
-+-----------+-----------+
-            |
-            v
-+-----------------------+
-| Exact Endgame Search  |
-+-----------------------+
+```bash
+python3 -m pytest tests/ -q
 ```
 
-One possible direction is to use high-performance C++ solving offline to generate additional solved middlegame positions, compress those results, and embed them into the self-contained Python Kaggle submission.
+## Building the Submission
 
-This would keep runtime lookup inexpensive while moving expensive exact solving outside the competition environment.
+### V6.1
+
+```bash
+python3 tools/build_submission.py
+```
+
+### V7.1 Hybrid
+
+```bash
+python3 tools/build_submission_v71.py
+```
+
+The V7.1 builder:
+
+1. Generates the proven V6.1 standalone submission.
+2. Compresses and embeds the V7 depth-12 exact score book.
+3. Adds the conservative exact-book decision override.
+4. Retains V6.1 as the fallback.
+5. Produces a self-contained `submission.py`.
+
+The generated Kaggle submission has no dependency on repository-local `src.*` imports or external book files.
 
 ## Repository Structure
 
@@ -368,61 +351,96 @@ src/
     bitboard.py
     search.py
     v6_agent.py
-    opening_book.py
-    exact_solver.py
+
+    v7_book.py
+    v7_solver.py
+    v7_compiled.py
+    v7_agent.py
+    v71_agent.py
 
 analysis/
     episode_parser.py
     solver_oracle.py
     v6_game_oracle.py
     pv_analysis.py
-    pv_oracle.py
     critical_depth_analysis.py
-    root_order_debug.py
-    root_order_experiment.py
     ...
 
 benchmarks/
     tournament.py
     v6_ab_tournament.py
-    endgame_benchmark.py
-    exact_solver_benchmark.py
+    v7_solver_benchmark.py
+    v7_vs_v61.py
     ...
 
 tests/
+    test_bitboard.py
     test_search.py
     test_opening_book.py
     test_compact_book.py
     test_solver_regressions.py
+    test_v7_book.py
+    test_v7_regressions.py
 
 tools/
     build_submission.py
-    build_opening_book.py
-    build_compact_book.py
+    build_submission_v7.py
+    build_submission_v71.py
+    build_v7_book.py
+    ...
+
+data/
+    opening_book/
+    v7/
+```
+
+## Version Progression
+
+```text
+V2–V4
+  |
+  +-- Early search and tactical agents
+  |
+ V6
+  |
+  +-- Solved opening book
+  +-- Stronger adversarial search
+  |
+ V6.1
+  |
+  +-- PVS
+  +-- Exact endgame
+  +-- Failure-driven regression improvements
+  |
+ V7
+  |
+  +-- 9.19M-position depth-12 exact book
+  +-- Compiled perfect solver
+  +-- 100% oracle agreement in validation
+  |
+ V7.1
+  |
+  +-- Kaggle-compatible hybrid
+  +-- Exact V7 book override
+  +-- V6.1 fallback
 ```
 
 ## Competition Constraints
 
-The production agent is designed around Kaggle ConnectX's environment:
+The production agent is designed for Kaggle ConnectX:
 
-- 7 x 6 Connect Four board
+- 7 × 6 Connect Four board
 - Four pieces required to win
-- Strict per-move runtime budget
-- Self-contained Python submission
+- Strict per-action runtime budget
+- Self-contained Python source submission
 - No required external runtime files
 
-`tools/build_submission.py` generates the standalone `submission.py` used for competition submission.
-
-## Current Status
-
-V6 established strong solved opening coverage, optimized adversarial search, and exact late-game capabilities.
-
-Large-scale oracle analysis identified the **ply 11-18 middlegame bridge** as the primary remaining weakness.
-
-Development is currently checkpointed at this stage, with future work focused on stronger exact middlegame coverage and potential C++-accelerated offline solving.
+The project deliberately separates **offline computation** from **runtime decision making**. Expensive perfect solving can be performed offline and compressed into solved knowledge, while the competition agent performs inexpensive lookup and bounded search.
 
 ## Acknowledgments
 
-Game-theoretic validation and exact-solver research use Pascal Pons' Connect Four solver and its published solving techniques.
+Exact Connect Four validation and solver research were informed by Pascal Pons' Connect Four solving techniques.
 
-The original Pascal Pons Connect Four solver is distributed under the GNU Affero General Public License v3.
+The project also used the open-source `connect-four-ai` Rust implementation by Benjamin Rall for independent exact-solver validation and depth-12 solved-book research.
+
+Third-party solver code and data remain subject to their respective licenses. This repository's own code should be interpreted separately from those upstream projects and datasets.
